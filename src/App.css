@@ -485,17 +485,93 @@ h3 {
 /* Progress Bar */
 .progress-bar {
   width: 100%;
-  height: 8px;
-  background: #e2e8f0;
-  border-radius: 4px;
+  height: 12px;
+  background: linear-gradient(90deg, #dc2626 0%, #ef4444 25%, #f59e0b 45%, #f59e0b 55%, #22c55e 75%, #16a34a 100%);
+  border-radius: 6px;
   overflow: hidden;
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.progress-bar::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.9);
+  transform: translateX(-50%);
+  z-index: 2;
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.5);
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #f97316 0%, #ea580c 100%);
-  border-radius: 4px;
-  transition: width 0.3s ease;
+  background: transparent;
+  border-radius: 6px;
+  transition: width 0.5s ease;
+  position: relative;
+  z-index: 1;
+}
+
+.progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 0 6px 6px 0;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
+}
+
+/* Goal Progress Specific Styles */
+.goal-progress-container {
+  position: relative;
+}
+
+.goal-progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.goal-progress-percentage {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.goal-progress-percentage.losing {
+  color: #dc2626;
+}
+
+.goal-progress-percentage.neutral {
+  color: #f59e0b;
+}
+
+.goal-progress-percentage.winning {
+  color: #16a34a;
+}
+
+.goal-progress-status {
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-top: 0.25rem;
+}
+
+.goal-progress-status.struggling {
+  color: #dc2626;
+}
+
+.goal-progress-status.maintaining {
+  color: #f59e0b;
+}
+
+.goal-progress-status.excelling {
+  color: #16a34a;
 }
 
 /* Status Styles */

@@ -67,37 +67,124 @@ const WeeklyReview = () => {
 
   const calculateWeeklyStats = (goal) => {
     if (!goal.tasks || goal.tasks.length === 0) {
-      return { completed: 0, total: 0, percentage: 0 }
+      return { completed: 0, total: 0, score: 0, weeklyScore: 0 }
     }
 
-    let completed = 0
-    let total = 0
-
+    // Advanced weekly progress calculation
+    const now = new Date()
+    const goalStartDate = new Date(goal.created_at)
+    const goalDeadline = new Date(goal.deadline)
+    
+    let weekCompleted = 0
+    let weekTotal = 0
+    let weekScore = 0
+    let weekWeight = 0
+    
+    // Collect week's task logs
+    const weekLogs = []
     goal.tasks.forEach(task => {
       if (task.task_logs) {
-        const weekLogs = task.task_logs.filter(log => {
+        const weekTaskLogs = task.task_logs.filter(log => {
           const logDate = new Date(log.due_date)
           return logDate >= weekStart && logDate <= weekEnd
         })
-        
-        total += weekLogs.length
-        completed += weekLogs.filter(log => log.status === 'completed').length
+        weekLogs.push(...weekTaskLogs.map(log => ({
+          ...log,
+          taskId: task.id,
+          taskTitle: task.title
+        })))
       }
     })
-
-    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0
-    return { completed, total, percentage }
+    
+    // Sort by date
+    weekLogs.sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
+    
+    weekTotal = weekLogs.length
+    
+    if (weekTotal === 0) {
+      return { completed: 0, total: 0, score: 0, weeklyScore: 0 }
+    }
+    
+    // Calculate weighted scores for the week
+    weekLogs.forEach((log, index) => {
+      const logDate = new Date(log.due_date)
+      const dayOfWeek = logDate.getDay()
+      
+      // Weight later days in the week slightly more
+      const dayWeight = 1 + (index / weekLogs.length) * 0.2
+      
+      let taskScore = 0
+      if (log.status === 'completed') {
+        taskScore = 1.0
+        weekCompleted++
+      } else if (log.status === 'missed') {
+        taskScore = -1.0
+      } else if (log.status === 'pending' && logDate < now) {
+        taskScore = -0.6
+      }
+      
+      weekScore += taskScore * dayWeight
+      weekWeight += dayWeight
+    })
+    
+    // Calculate streak within the week
+    let weekStreak = 0
+    let currentWeekStreak = 0
+    let missedStreak = 0
+    
+    weekLogs.forEach(log => {
+      if (log.status === 'completed') {
+        currentWeekStreak++
+        weekStreak = Math.max(weekStreak, currentWeekStreak)
+        missedStreak = 0
+      } else if (log.status === 'missed') {
+        currentWeekStreak = 0
+        missedStreak++
+      }
+    })
+    
+    // Apply streak bonus for the week
+    let streakBonus = 0
+    if (weekStreak >= 5) {
+      streakBonus = Math.min(20, weekStreak * 2.5) // Max 20% bonus for weekly streak
+    } else if (weekStreak >= 3) {
+      streakBonus = weekStreak * 1.5
+    } else if (missedStreak >= 3) {
+      streakBonus = -Math.min(20, missedStreak * 3) // Penalty for missing streaks
+    }
+    
+    // Calculate base weekly performance
+    const baseWeeklyPerformance = weekWeight > 0 ? (weekScore / weekWeight) : 0
+    
+    // Apply streak bonus
+    const adjustedWeeklyScore = baseWeeklyPerformance + (streakBonus / 100)
+    
+    // Convert to score (-100 to +100 scale)
+    const weeklyScore = Math.max(-100, Math.min(100, adjustedWeeklyScore * 50))
+    
+    return { 
+      completed: weekCompleted, 
+      total: weekTotal, 
+      score: Math.round(weeklyScore),
+      weeklyScore: adjustedWeeklyScore
+    }
   }
 
   const generateSuggestions = (stats) => {
-    if (stats.percentage >= 90) {
-      return "Excellent execution! Consider adding more challenging lead measures or increasing frequency."
-    } else if (stats.percentage >= 70) {
-      return "Good progress! Look for small optimizations to reach 90%+ consistency."
-    } else if (stats.percentage >= 50) {
-      return "Room for improvement. Consider simplifying your lead measures or adjusting frequency."
+    const { score, weeklyScore } = stats
+    
+    if (score >= 60) {
+      return "Outstanding performance! You're excelling beyond expectations. Consider adding more challenging lead measures or increasing frequency to maintain momentum."
+    } else if (score >= 30) {
+      return "Great execution! You're performing well above the baseline. Look for small optimizations to reach elite consistency (60%+)."
+    } else if (score >= 10) {
+      return "Good progress! You're slightly above neutral. Focus on consistency to build momentum and avoid regression."
+    } else if (score >= -10) {
+      return "Neutral performance. You're maintaining the baseline but not progressing. Consider what obstacles are preventing forward movement."
+    } else if (score >= -40) {
+      return "Below baseline performance. You're sliding backwards. Consider simplifying your lead measures or reducing frequency to regain momentum."
     } else {
-      return "Significant improvement needed. You might be overcommitting - try focusing on fewer, simpler tasks."
+      return "Significant regression detected. You're well below baseline. Focus on just 1-2 simple, achievable tasks to rebuild consistency and confidence."
     }
   }
 
@@ -218,9 +305,9 @@ const GoalReviewCard = ({ goal, stats, existingReview, onSubmit, saving }) => {
   }
 
   const suggestions = existingReview?.auto_suggestions || 
-    (stats.percentage >= 90 ? "Excellent execution! Consider adding more challenging lead measures." :
-     stats.percentage >= 70 ? "Good progress! Look for small optimizations to reach 90%+ consistency." :
-     stats.percentage >= 50 ? "Room for improvement. Consider simplifying your lead measures." :
+    (stats.score >= 60 ? "Excellent execution! Consider adding more challenging lead measures." :
+     stats.score >= 30 ? "Good progress! Look for small optimizations to reach elite consistency." :
+     stats.score >= -10 ? "Room for improvement. Consider simplifying your lead measures." :
      "Significant improvement needed. You might be overcommitting - try focusing on fewer tasks.")
 
   return (
@@ -236,22 +323,34 @@ const GoalReviewCard = ({ goal, stats, existingReview, onSubmit, saving }) => {
           <TrendingUp size={16} className="text-blue-400" />
           <span className="font-medium">This Week's Performance</span>
         </div>
-        <div className="flex justify-between items-center">
+        <div className="goal-progress-info">
           <span className="text-sm text-white/70">
             {stats.completed} of {stats.total} tasks completed
           </span>
-          <span className={`font-bold ${
-            stats.percentage >= 80 ? 'text-green-400' :
-            stats.percentage >= 60 ? 'text-yellow-400' : 'text-red-400'
+          <span className={`goal-progress-percentage ${
+            stats.score < -10 ? 'losing' :
+            stats.score <= 10 ? 'neutral' : 'winning'
           }`}>
-            {stats.percentage}%
+            {stats.score > 0 ? '+' : ''}{stats.score}
           </span>
         </div>
         <div className="progress-bar mt-2">
           <div 
             className="progress-fill" 
-            style={{ width: `${stats.percentage}%` }}
+            style={{ width: `${Math.max(0, Math.min(100, ((stats.score + 100) / 2)))}%` }}
           ></div>
+        </div>
+        <div className="goal-progress-status mt-2">
+          <span className={`${
+            stats.score <= -50 ? 'struggling' :
+            stats.score < -10 ? 'struggling' :
+            stats.score <= 10 ? 'maintaining' : 'excelling'
+          }`}>
+            {stats.score <= -50 ? 'Struggling This Week' :
+             stats.score < -10 ? 'Falling Behind This Week' :
+             stats.score <= 10 ? 'Maintaining This Week' : 
+             stats.score <= 50 ? 'Progressing This Week' : 'Excelling This Week'}
+          </span>
         </div>
       </div>
 
