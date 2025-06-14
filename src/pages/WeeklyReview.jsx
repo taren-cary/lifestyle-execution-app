@@ -70,15 +70,23 @@ const WeeklyReview = () => {
       return { completed: 0, total: 0, score: 0, weeklyScore: 0 }
     }
 
-    // Advanced weekly progress calculation
+    // Advanced weekly progress calculation with deadline awareness
     const now = new Date()
     const goalStartDate = new Date(goal.created_at)
     const goalDeadline = new Date(goal.deadline)
+    const totalGoalDays = Math.max(1, Math.ceil((goalDeadline - goalStartDate) / (1000 * 60 * 60 * 24)))
+    const daysElapsed = Math.max(0, Math.ceil((now - goalStartDate) / (1000 * 60 * 60 * 24)))
+    
+    // Timeline progress and deadline pressure
+    const timelineProgress = Math.min(1, daysElapsed / totalGoalDays)
+    const deadlinePressure = timelineProgress > 0.5 ? 
+      Math.pow((timelineProgress - 0.5) * 2, 1.5) : 0
     
     let weekCompleted = 0
     let weekTotal = 0
     let weekScore = 0
     let weekWeight = 0
+    let timelineAdjustment = 0
     
     // Collect week's task logs
     const weekLogs = []
@@ -105,29 +113,49 @@ const WeeklyReview = () => {
       return { completed: 0, total: 0, score: 0, weeklyScore: 0 }
     }
     
-    // Calculate weighted scores for the week
+    // Calculate expected weekly performance based on timeline
+    const expectedWeeklyCompletionRate = 0.8 // Expect 80% completion for neutral
+    const weekTimelinePosition = timelineProgress
+    const expectedWeeklyScore = (weekTimelinePosition * expectedWeeklyCompletionRate * 2) - 1
+    
+    // Calculate weighted scores for the week with deadline pressure
     weekLogs.forEach((log, index) => {
       const logDate = new Date(log.due_date)
       const dayOfWeek = logDate.getDay()
       
-      // Weight later days in the week slightly more
+      // Weight later days in the week slightly more, amplified by deadline pressure
       const dayWeight = 1 + (index / weekLogs.length) * 0.2
+      const pressureMultiplier = 1 + (deadlinePressure * 1.2) // Less aggressive than daily calculation
       
       let taskScore = 0
       if (log.status === 'completed') {
-        taskScore = 1.0
+        taskScore = 1.0 * (deadlinePressure > 0.3 ? pressureMultiplier * 0.9 : 1.0)
         weekCompleted++
       } else if (log.status === 'missed') {
-        taskScore = -1.0
+        taskScore = -1.0 * pressureMultiplier
       } else if (log.status === 'pending' && logDate < now) {
-        taskScore = -0.6
+        taskScore = -0.6 * pressureMultiplier
       }
       
       weekScore += taskScore * dayWeight
       weekWeight += dayWeight
     })
     
-    // Calculate streak within the week
+    // Calculate actual vs expected weekly performance
+    const actualWeeklyPerformance = weekWeight > 0 ? (weekScore / weekWeight) : 0
+    const weeklyPerformanceGap = actualWeeklyPerformance - expectedWeeklyScore
+    
+    // Timeline adjustment for weekly performance
+    if (timelineProgress > 0.1) { // Apply after 10% through goal
+      if (weeklyPerformanceGap > 0.3) {
+        timelineAdjustment = Math.min(12, weeklyPerformanceGap * 20) // Bonus for exceeding weekly expectations
+      } else if (weeklyPerformanceGap < -0.2) {
+        const urgencyMultiplier = deadlinePressure > 0 ? (1 + deadlinePressure * 1.5) : 1
+        timelineAdjustment = Math.max(-25, weeklyPerformanceGap * 35 * urgencyMultiplier) // Penalty for underperforming, amplified near deadline
+      }
+    }
+    
+    // Calculate streak within the week with deadline pressure
     let weekStreak = 0
     let currentWeekStreak = 0
     let missedStreak = 0
@@ -143,21 +171,27 @@ const WeeklyReview = () => {
       }
     })
     
-    // Apply streak bonus for the week
+    // Apply streak bonus for the week with deadline awareness
     let streakBonus = 0
+    const weeklyStreakMultiplier = 1 + (deadlinePressure * 0.4)
+    
     if (weekStreak >= 5) {
-      streakBonus = Math.min(20, weekStreak * 2.5) // Max 20% bonus for weekly streak
+      streakBonus = Math.min(18, weekStreak * 2.2 * weeklyStreakMultiplier) // Enhanced bonus near deadline
     } else if (weekStreak >= 3) {
-      streakBonus = weekStreak * 1.5
+      streakBonus = weekStreak * 1.3 * weeklyStreakMultiplier
     } else if (missedStreak >= 3) {
-      streakBonus = -Math.min(20, missedStreak * 3) // Penalty for missing streaks
+      streakBonus = -Math.min(20, missedStreak * 3.5 * weeklyStreakMultiplier) // Harsher penalty near deadline
+    } else if (missedStreak >= 1 && deadlinePressure > 0.8) {
+      streakBonus = -Math.min(12, missedStreak * 6) // Critical penalty very near deadline
     }
     
     // Calculate base weekly performance
-    const baseWeeklyPerformance = weekWeight > 0 ? (weekScore / weekWeight) : 0
+    const baseWeeklyPerformance = actualWeeklyPerformance
     
-    // Apply streak bonus
-    const adjustedWeeklyScore = baseWeeklyPerformance + (streakBonus / 100)
+    // Apply all weekly adjustments
+    const adjustedWeeklyScore = baseWeeklyPerformance + 
+                               (streakBonus / 100) + 
+                               (timelineAdjustment / 100)
     
     // Convert to score (-100 to +100 scale)
     const weeklyScore = Math.max(-100, Math.min(100, adjustedWeeklyScore * 50))
@@ -173,18 +207,23 @@ const WeeklyReview = () => {
   const generateSuggestions = (stats) => {
     const { score, weeklyScore } = stats
     
+    // Get deadline pressure context for suggestions
+    const now = new Date()
+    const goalDeadline = new Date() // This would need to be passed from goal data
+    // For now, we'll use score-based suggestions with deadline awareness built into the scoring
+    
     if (score >= 60) {
-      return "Outstanding performance! You're excelling beyond expectations. Consider adding more challenging lead measures or increasing frequency to maintain momentum."
+      return "Outstanding weekly performance! You're excelling beyond expectations. With this momentum, consider adding more challenging lead measures or increasing frequency to maximize your goal achievement."
     } else if (score >= 30) {
-      return "Great execution! You're performing well above the baseline. Look for small optimizations to reach elite consistency (60%+)."
+      return "Great weekly execution! You're performing well above the baseline. Focus on maintaining this consistency and look for small optimizations to reach elite performance (60%+)."
     } else if (score >= 10) {
-      return "Good progress! You're slightly above neutral. Focus on consistency to build momentum and avoid regression."
+      return "Good weekly progress! You're slightly above neutral. Focus on building consistency to create momentum. Identify what's working well and double down on those strategies."
     } else if (score >= -10) {
-      return "Neutral performance. You're maintaining the baseline but not progressing. Consider what obstacles are preventing forward movement."
+      return "Neutral weekly performance. You're maintaining the baseline but not progressing. This week, identify the main obstacles preventing forward movement and address them systematically."
     } else if (score >= -40) {
-      return "Below baseline performance. You're sliding backwards. Consider simplifying your lead measures or reducing frequency to regain momentum."
+      return "Below baseline weekly performance. You're sliding backwards this week. Consider simplifying your lead measures, reducing frequency, or addressing any external factors that may be interfering with execution."
     } else {
-      return "Significant regression detected. You're well below baseline. Focus on just 1-2 simple, achievable tasks to rebuild consistency and confidence."
+      return "Significant weekly regression detected. You're well below baseline. This week, focus on just 1-2 simple, achievable tasks to rebuild consistency and confidence. Consider if your current approach needs fundamental changes."
     }
   }
 

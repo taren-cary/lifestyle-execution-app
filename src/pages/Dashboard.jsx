@@ -169,12 +169,21 @@ const Dashboard = () => {
   const calculateGoalProgress = (goal) => {
     if (!goal.tasks || goal.tasks.length === 0) return 0 // Start at neutral when no tasks
     
-    // Advanced progress calculation with multiple factors
+    // Advanced progress calculation with deadline awareness
     const now = new Date()
     const goalStartDate = new Date(goal.created_at)
     const goalDeadline = new Date(goal.deadline)
     const totalGoalDays = Math.max(1, Math.ceil((goalDeadline - goalStartDate) / (1000 * 60 * 60 * 24)))
     const daysElapsed = Math.max(0, Math.ceil((now - goalStartDate) / (1000 * 60 * 60 * 24)))
+    const daysRemaining = Math.max(0, Math.ceil((goalDeadline - now) / (1000 * 60 * 60 * 24)))
+    
+    // Timeline progress (0 to 1)
+    const timelineProgress = Math.min(1, daysElapsed / totalGoalDays)
+    const timelineRemaining = Math.max(0, 1 - timelineProgress)
+    
+    // Deadline pressure factor (increases as deadline approaches)
+    const deadlinePressure = timelineProgress > 0.5 ? 
+      Math.pow((timelineProgress - 0.5) * 2, 1.5) : 0 // Exponential increase after 50%
     
     let totalScore = 0
     let totalWeight = 0
@@ -182,6 +191,7 @@ const Dashboard = () => {
     let recentWeight = 0
     let streakBonus = 0
     let consistencyFactor = 1
+    let timelineAdjustment = 0
     
     // Collect all task logs for this goal
     const allLogs = []
@@ -202,40 +212,71 @@ const Dashboard = () => {
     
     if (allLogs.length === 0) return 0 // Start at neutral when no logs
     
+    // Calculate expected progress based on timeline
+    const totalTasksExpected = allLogs.length
+    const expectedCompletionRate = 0.8 // Expect 80% completion for neutral progress
+    const expectedScore = (timelineProgress * expectedCompletionRate * 2) - 1 // Scale to -1 to +1
+    
     // Calculate time-weighted performance scores
     allLogs.forEach((log, index) => {
       const logDate = new Date(log.due_date)
       const daysFromStart = Math.max(0, Math.ceil((logDate - goalStartDate) / (1000 * 60 * 60 * 24)))
       const daysFromNow = Math.max(0, Math.ceil((now - logDate) / (1000 * 60 * 60 * 24)))
+      const logTimelinePosition = daysFromStart / totalGoalDays
       
-      // Time decay factor - recent tasks matter more
-      const timeDecay = Math.exp(-daysFromNow / 14) // 14-day half-life
+      // Time decay factor - recent tasks matter more, especially near deadline
+      const baseDecay = Math.exp(-daysFromNow / 14) // 14-day half-life
+      const deadlineDecay = deadlinePressure > 0 ? Math.exp(-daysFromNow / 7) : baseDecay // 7-day half-life near deadline
+      const timeDecay = Math.max(baseDecay, deadlineDecay * deadlinePressure)
       
-      // Position weight - later tasks in goal timeline matter more
-      const positionWeight = Math.min(2, 1 + (daysFromStart / totalGoalDays))
+      // Position weight - later tasks matter more, amplified by deadline pressure
+      const basePositionWeight = Math.min(2, 1 + logTimelinePosition)
+      const deadlinePositionWeight = deadlinePressure > 0 ? 
+        Math.min(3, basePositionWeight * (1 + deadlinePressure)) : basePositionWeight
       
-      // Calculate base score for this task
+      // Calculate base score for this task with deadline pressure
       let taskScore = 0
+      const basePenalty = 1.0
+      const baseReward = 1.0
+      
+      // Deadline pressure multiplier (1.0 to 2.5x)
+      const pressureMultiplier = 1 + (deadlinePressure * 1.5)
+      
       if (log.status === 'completed') {
-        taskScore = 1.0 // Full points for completion
+        taskScore = baseReward * (deadlinePressure > 0.3 ? pressureMultiplier * 0.8 : 1.0) // Bonus for completing under pressure
       } else if (log.status === 'missed') {
-        taskScore = -1.0 // Full penalty for missing
+        taskScore = -basePenalty * pressureMultiplier // Heavier penalty for missing under pressure
       } else if (log.status === 'pending' && logDate < now) {
-        taskScore = -0.6 // Penalty for overdue pending
+        taskScore = -0.6 * pressureMultiplier // Escalating penalty for overdue tasks
       }
       
-      const weight = timeDecay * positionWeight
+      const weight = timeDecay * deadlinePositionWeight
       totalScore += taskScore * weight
       totalWeight += weight
       
-      // Track recent performance (last 7 days)
-      if (daysFromNow <= 7) {
+      // Track recent performance with deadline awareness
+      const recentDays = deadlinePressure > 0.5 ? 3 : 7 // Shorter window near deadline
+      if (daysFromNow <= recentDays) {
         recentPerformance += taskScore * timeDecay
         recentWeight += timeDecay
       }
     })
     
-    // Calculate streak bonus
+    // Calculate actual vs expected performance
+    const actualPerformance = totalWeight > 0 ? (totalScore / totalWeight) : 0
+    const performanceGap = actualPerformance - expectedScore
+    
+    // Timeline adjustment based on expected vs actual progress
+    if (timelineProgress > 0.2) { // Only apply after 20% through goal
+      if (performanceGap > 0.3) {
+        timelineAdjustment = Math.min(15, performanceGap * 25) // Bonus for being ahead
+      } else if (performanceGap < -0.2) {
+        const urgencyMultiplier = deadlinePressure > 0 ? (1 + deadlinePressure * 2) : 1
+        timelineAdjustment = Math.max(-30, performanceGap * 40 * urgencyMultiplier) // Penalty for being behind, amplified near deadline
+      }
+    }
+    
+    // Calculate streak bonus with deadline awareness
     let currentStreak = 0
     let longestStreak = 0
     let tempStreak = 0
@@ -259,25 +300,28 @@ const Dashboard = () => {
       }
     }
     
-    // Streak bonus/penalty calculation
+    // Streak bonus/penalty with deadline pressure
+    const streakMultiplier = 1 + (deadlinePressure * 0.5)
     if (currentStreak >= 5) {
-      streakBonus = Math.min(25, currentStreak * 3) // Max 25% bonus for long streaks
+      streakBonus = Math.min(25, currentStreak * 3 * streakMultiplier) // Enhanced bonus near deadline
     } else if (currentStreak >= 3) {
-      streakBonus = currentStreak * 2 // Moderate bonus for good streaks
+      streakBonus = currentStreak * 2 * streakMultiplier
     } else if (missedStreak >= 3) {
-      streakBonus = -Math.min(25, missedStreak * 4) // Penalty for missing streaks
+      streakBonus = -Math.min(35, missedStreak * 5 * streakMultiplier) // Harsher penalty near deadline
+    } else if (missedStreak >= 1 && deadlinePressure > 0.7) {
+      streakBonus = -Math.min(15, missedStreak * 8) // Any miss is critical very near deadline
     }
     
-    // Consistency factor based on variance in performance
+    // Consistency factor with deadline consideration
     if (allLogs.length >= 5) {
       const completionRates = []
-      const windowSize = 5
+      const windowSize = Math.min(5, Math.max(3, Math.floor(allLogs.length / 3)))
       
       for (let i = 0; i <= allLogs.length - windowSize; i++) {
         const window = allLogs.slice(i, i + windowSize)
         const completed = window.filter(log => log.status === 'completed').length
         const missed = window.filter(log => log.status === 'missed').length
-        const rate = (completed - missed) / windowSize // Range from -1 to 1
+        const rate = (completed - missed) / windowSize
         completionRates.push(rate)
       }
       
@@ -286,25 +330,28 @@ const Dashboard = () => {
         const variance = completionRates.reduce((acc, rate) => acc + Math.pow(rate - mean, 2), 0) / completionRates.length
         const stdDev = Math.sqrt(variance)
         
-        // Reward consistency (low standard deviation)
-        consistencyFactor = Math.max(0.7, 1 - stdDev * 0.5)
+        // Reward consistency more near deadline
+        const consistencyImportance = 1 + (deadlinePressure * 0.3)
+        consistencyFactor = Math.max(0.6, (1 - stdDev * 0.5) * consistencyImportance)
       }
     }
     
     // Calculate base performance score
-    const basePerformance = totalWeight > 0 ? (totalScore / totalWeight) : 0
+    const basePerformance = actualPerformance
     
-    // Recent performance weight (last 7 days matter more)
+    // Recent performance weight (more important near deadline)
+    const recentWeight_factor = deadlinePressure > 0.3 ? 0.7 : 0.4
     const recentPerformanceScore = recentWeight > 0 ? (recentPerformance / recentWeight) : basePerformance
     
-    // Combine factors with weights
-    const combinedScore = (basePerformance * 0.6) + (recentPerformanceScore * 0.4)
+    // Combine factors with deadline-aware weights
+    const combinedScore = (basePerformance * (1 - recentWeight_factor)) + (recentPerformanceScore * recentWeight_factor)
     
-    // Apply consistency factor and streak bonus
-    const adjustedScore = (combinedScore * consistencyFactor) + (streakBonus / 100)
+    // Apply all adjustments
+    const adjustedScore = (combinedScore * consistencyFactor) + 
+                         (streakBonus / 100) + 
+                         (timelineAdjustment / 100)
     
     // Convert to progress score (-100 to +100 scale)
-    // Score ranges from approximately -2 to 2, we map this to -100 to +100
     const progressScore = Math.max(-100, Math.min(100, adjustedScore * 50))
     
     return Math.round(progressScore)
