@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { format } from 'date-fns'
-import { Plus, CheckSquare, Clock, AlertCircle } from 'lucide-react'
+import { Plus, CheckSquare, Clock, AlertCircle, Edit2, Trash2 } from 'lucide-react'
+import { ensureTaskLogsUpToDate } from '../lib/taskUtils'
 
 const Tasks = () => {
   const [tasks, setTasks] = useState([])
   const [goals, setGoals] = useState([])
   const [todaysTasks, setTodaysTasks] = useState([])
   const [showForm, setShowForm] = useState(false)
+  const [editingTask, setEditingTask] = useState(null)
   const [loading, setLoading] = useState(true)
   const [formData, setFormData] = useState({
     title: '',
@@ -25,6 +27,9 @@ const Tasks = () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
+
+      // Generate task logs for today and mark overdue tasks as missed
+      await ensureTaskLogsUpToDate()
 
       // Fetch goals
       const { data: goalsData } = await supabase
@@ -84,11 +89,25 @@ const Tasks = () => {
         custom_days: formData.frequency === 'custom' ? parseInt(formData.custom_days) : null
       }
 
-      const { error } = await supabase
-        .from('tasks')
-        .insert([taskData])
+      if (editingTask) {
+        // Update existing task
+        const { error } = await supabase
+          .from('tasks')
+          .update(taskData)
+          .eq('id', editingTask.id)
 
-      if (error) throw error
+        if (error) throw error
+      } else {
+        // Create new task
+        const { error } = await supabase
+          .from('tasks')
+          .insert([taskData])
+
+        if (error) throw error
+      }
+
+      // Generate task logs for the new/updated task starting from today
+      await ensureTaskLogsUpToDate()
 
       setFormData({
         title: '',
@@ -98,10 +117,54 @@ const Tasks = () => {
         start_date: format(new Date(), 'yyyy-MM-dd')
       })
       setShowForm(false)
+      setEditingTask(null)
       fetchData()
     } catch (error) {
-      console.error('Error creating task:', error)
+      console.error('Error saving task:', error)
     }
+  }
+
+  const handleEdit = (task) => {
+    setEditingTask(task)
+    setFormData({
+      title: task.title,
+      goal_id: task.goal_id,
+      frequency: task.frequency,
+      custom_days: task.custom_days || 1,
+      start_date: task.start_date
+    })
+    setShowForm(true)
+  }
+
+  const handleDelete = async (taskId) => {
+    if (!confirm('Are you sure you want to delete this task? This action cannot be undone.')) {
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ is_active: false })
+        .eq('id', taskId)
+
+      if (error) throw error
+      
+      fetchData()
+    } catch (error) {
+      console.error('Error deleting task:', error)
+    }
+  }
+
+  const resetForm = () => {
+    setFormData({
+      title: '',
+      goal_id: '',
+      frequency: 'daily',
+      custom_days: 1,
+      start_date: format(new Date(), 'yyyy-MM-dd')
+    })
+    setEditingTask(null)
+    setShowForm(false)
   }
 
   const markTaskComplete = async (taskLogId) => {
@@ -115,6 +178,10 @@ const Tasks = () => {
         .eq('id', taskLogId)
 
       if (error) throw error
+      
+      // Ensure task logs are up to date after completing a task
+      await ensureTaskLogsUpToDate()
+      
       fetchData()
     } catch (error) {
       console.error('Error marking task complete:', error)
@@ -179,7 +246,7 @@ const Tasks = () => {
       {showForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="glass-strong w-full max-w-md p-6">
-            <h2 className="mb-4">Create New Task</h2>
+            <h2 className="mb-4">{editingTask ? 'Edit Task' : 'Create New Task'}</h2>
             
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="form-group">
@@ -254,11 +321,11 @@ const Tasks = () => {
 
               <div className="flex gap-3">
                 <button type="submit" className="btn btn-primary flex-1">
-                  Create Task
+                  {editingTask ? 'Update Task' : 'Create Task'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowForm(false)}
+                  onClick={resetForm}
                   className="btn btn-secondary flex-1"
                 >
                   Cancel
@@ -343,6 +410,22 @@ const Tasks = () => {
                       <span>{getFrequencyText(task.frequency, task.custom_days)}</span>
                       <span>Started: {format(new Date(task.start_date), 'MMM d, yyyy')}</span>
                     </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleEdit(task)}
+                      className="btn btn-secondary btn-sm"
+                      title="Edit task"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(task.id)}
+                      className="btn btn-danger btn-sm"
+                      title="Delete task"
+                    >
+                      <Trash2 size={16} />
+                    </button>
                   </div>
                 </div>
               </div>
