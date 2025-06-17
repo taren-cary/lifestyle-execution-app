@@ -59,6 +59,9 @@ const Goals = () => {
     const totalGoalDays = Math.max(1, Math.ceil((goalDeadline - goalStartDate) / (1000 * 60 * 60 * 24)))
     const daysElapsed = Math.max(0, Math.ceil((now - goalStartDate) / (1000 * 60 * 60 * 24)))
     
+    // Timeline progress (0 to 1)
+    const timelineProgress = Math.min(1, daysElapsed / totalGoalDays)
+    
     // Collect all task logs for this goal
     const allLogs = []
     goal.tasks.forEach(task => {
@@ -75,110 +78,82 @@ const Goals = () => {
     
     if (allLogs.length === 0) return 0 // Start at neutral when no logs
     
-    // Sort logs by date
-    allLogs.sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
-    
-    // Calculate basic completion rate
+    // Calculate overall completion rate
     const completed = allLogs.filter(log => log.status === 'completed').length
     const missed = allLogs.filter(log => log.status === 'missed').length
-    const pending = allLogs.filter(log => log.status === 'pending').length
     const total = allLogs.length
+    const actualCompletionRate = total > 0 ? completed / total : 0
     
-    if (total === 0) return 0
+    // Expected score based on timeline progress
+    // If timeline is 50% complete and you have 100% completion rate, you should have +50 points
+    const expectedMaxScore = timelineProgress * 100 // Maximum possible at this point in timeline
+    const actualScore = actualCompletionRate * expectedMaxScore // Your actual performance relative to timeline
     
-    // Base score from completion rate (0-100 scale)
-    const completionRate = completed / total
-    let baseScore = (completionRate * 100) - 50 // Scale to -50 to +50, with 50% completion = 0
+    // Base score (what you've earned so far relative to where you should be)
+    let baseScore = actualScore
     
-    // Early goal grace period - be much more forgiving in the first week
-    const isEarlyStage = daysElapsed <= 7
-    const isVeryEarly = daysElapsed <= 3
-    
-    if (isVeryEarly) {
-      // In first 3 days, focus only on positive progress
-      if (completed > 0) {
-        baseScore = Math.max(0, (completed / Math.max(completed + missed, 1)) * 30) // Max +30 in first 3 days
-      } else if (missed === 0 && pending > 0) {
-        baseScore = 0 // Neutral if no misses yet
-      } else {
-        baseScore = Math.max(-15, baseScore) // Cap negative impact in first 3 days
-      }
-    } else if (isEarlyStage) {
-      // In first week, be more forgiving
-      baseScore = baseScore * 0.6 // Reduce impact by 40%
-      if (completed > missed) {
-        baseScore = Math.max(baseScore, 5) // Slight positive bias if more completed than missed
-      }
+    // Adjust for completion rate expectations
+    if (actualCompletionRate >= 0.9) {
+      // 90%+ completion: You're exceeding expectations
+      baseScore = actualScore + (timelineProgress * 10) // Small bonus
+    } else if (actualCompletionRate >= 0.8) {
+      // 80-89% completion: Right on track  
+      baseScore = actualScore // No adjustment
+    } else if (actualCompletionRate >= 0.7) {
+      // 70-79% completion: Slightly behind
+      baseScore = actualScore - (timelineProgress * 10) // Small penalty
+    } else {
+      // Below 70%: Concerning performance
+      baseScore = actualScore - (timelineProgress * 20) // Larger penalty
     }
     
-    // Streak bonus/penalty (but lighter in early stages)
-    let streakAdjustment = 0
-    let currentStreak = 0
-    let currentMissStreak = 0
+    // Recent performance adjustment (last 7 days)
+    const recentLogs = allLogs
+      .filter(log => {
+        const logDate = new Date(log.due_date)
+        const daysAgo = Math.ceil((now - logDate) / (1000 * 60 * 60 * 24))
+        return daysAgo <= 7
+      })
+      .sort((a, b) => new Date(b.due_date) - new Date(a.due_date))
     
-    // Calculate current streak from most recent
-    const recentLogs = [...allLogs].reverse()
-    for (const log of recentLogs) {
-      if (log.status === 'completed') {
-        currentStreak++
-        break
-      } else if (log.status === 'missed') {
-        currentMissStreak++
-      } else {
-        break // Stop at pending
-      }
-    }
-    
-    // Streak bonuses (reduced in early stages)
-    const streakMultiplier = isEarlyStage ? 0.5 : 1.0
-    if (currentStreak >= 3) {
-      streakAdjustment = Math.min(20, currentStreak * 3) * streakMultiplier
-    } else if (currentMissStreak >= 2 && !isVeryEarly) {
-      streakAdjustment = -Math.min(15, currentMissStreak * 4) * streakMultiplier
-    }
-    
-    // Timeline awareness (only after first week)
-    let timelineAdjustment = 0
-    if (!isEarlyStage && total >= 7) {
-      const timelineProgress = daysElapsed / totalGoalDays
-      const expectedCompletionRate = 0.7 // Expect 70% for neutral (more realistic)
-      const actualRate = completionRate
-      const progressGap = actualRate - expectedCompletionRate
-      
-      // Only apply significant timeline pressure after 25% through goal
-      if (timelineProgress > 0.25) {
-        if (progressGap > 0.2) {
-          timelineAdjustment = Math.min(15, progressGap * 30) // Bonus for being ahead
-        } else if (progressGap < -0.3) {
-          // More gradual penalty, increasing with timeline progress
-          const urgency = Math.min(1, timelineProgress)
-          timelineAdjustment = Math.max(-25, progressGap * 25 * urgency)
-        }
-      }
-    }
-    
-    // Recent performance weight (last 7 days)
     let recentAdjustment = 0
-    if (total >= 3) {
-      const recent = allLogs.slice(-7) // Last 7 task logs
-      const recentCompleted = recent.filter(log => log.status === 'completed').length
-      const recentMissed = recent.filter(log => log.status === 'missed').length
-      const recentTotal = recent.length
+    if (recentLogs.length >= 3) {
+      const recentCompleted = recentLogs.filter(log => log.status === 'completed').length
+      const recentTotal = recentLogs.length
+      const recentRate = recentCompleted / recentTotal
+      const overallRate = actualCompletionRate
       
-      if (recentTotal > 0) {
-        const recentRate = recentCompleted / recentTotal
-        const overallRate = completionRate
-        const recentTrend = recentRate - overallRate
-        
-        // Small adjustment based on recent trend
-        recentAdjustment = recentTrend * 10
+      // Boost or penalize based on recent trend
+      const trendDifference = recentRate - overallRate
+      recentAdjustment = trendDifference * 15 // Small adjustment for recent performance
+    }
+    
+    // Consecutive miss penalty (no streak bonuses)
+    let consecutiveMissAdjustment = 0
+    let consecutiveMisses = 0
+    
+    // Check recent logs for consecutive misses
+    for (const log of recentLogs.slice(0, 5)) { // Check last 5 task instances
+      if (log.status === 'missed') {
+        consecutiveMisses++
+      } else {
+        break
       }
+    }
+    
+    // Apply penalties for consecutive misses only
+    if (consecutiveMisses >= 3) {
+      consecutiveMissAdjustment = -15 // Routine breakdown
+    } else if (consecutiveMisses === 2) {
+      consecutiveMissAdjustment = -8 // Concerning pattern  
+    } else if (consecutiveMisses === 1) {
+      consecutiveMissAdjustment = -3 // Minor disruption
     }
     
     // Combine all factors
-    const finalScore = baseScore + streakAdjustment + timelineAdjustment + recentAdjustment
+    const finalScore = baseScore + recentAdjustment + consecutiveMissAdjustment
     
-    // Return capped score
+    // Return capped score (-100 to +100)
     return Math.max(-100, Math.min(100, Math.round(finalScore)))
   }
 
